@@ -101,7 +101,7 @@ class LiveStatusLogStoreSqlite(BaseModule):
         BaseModule.__init__(self, modconf)
         self.plugins = []
         # Change. The var folder is not defined based upon '.', but upon ../var from the process name (shinken-broker)
-        # When the database_file variable, the default variable was calculated from '.'... Depending on where you were 
+        # When the database_file variable, the default variable was calculated from '.'... Depending on where you were
         # when you ran the command the behavior changed.
         self.database_file = getattr(modconf, 'database_file', os.path.join(os.path.abspath('.'), 'livestatus.db'))
         self.archive_path = getattr(modconf, 'archive_path', os.path.join(os.path.dirname(self.database_file), 'archives'))
@@ -126,6 +126,7 @@ class LiveStatusLogStoreSqlite(BaseModule):
                 self.max_logs_age = int(maxmatch.group(1)) * 31
             elif maxmatch.group(2) == 'y':
                 self.max_logs_age = int(maxmatch.group(1)) * 365
+        logger.info("[Logstore SQLite] Set max_logs_age to %d days", self.max_logs_age)
         self.use_aggressive_sql = (getattr(modconf, 'use_aggressive_sql', '0') == '1')
         self.read_only = (getattr(modconf, 'read_only', '0') == '1')
 
@@ -243,9 +244,31 @@ class LiveStatusLogStoreSqlite(BaseModule):
             else:
                 nextrotation = today0005 + datetime.timedelta(days=1)
 
+            # cleanup old archives
+            self.cleanup_old_archives()
+
             # See you tomorrow
             self.next_log_db_rotate = time.mktime(nextrotation.timetuple())
             logger.info("[Logstore SQLite] next rotation at %s " % time.asctime(time.localtime(self.next_log_db_rotate)))
+
+    def cleanup_old_archives(self):
+        """
+        Remove all old archives that we don't need anymore.
+        """
+        logger.info("[Logstore SQLite] Start Cleaning up old archives")
+        for filename in os.listdir(self.archive_path):
+            db_regex = r'.*-\d{4}-\d{2}-\d{2}.db'
+            if not re.search(db_regex, filename):
+                logger.info("[Logstore SQLite] Ignoring %s", filename)
+                continue
+            # the filename looks like "{database_name}-%Y-%m-%d.db"
+            db_datetime = datetime.datetime.strptime('-'.join(filename[:-3].split('-')[-3:]), '%Y-%m-%d')
+            db_date = datetime.date(year=db_datetime.year, month=db_datetime.month, day=db_datetime.day)
+            now_date = datetime.date.today()
+            max_age_delta = datetime.timedelta(days=self.max_logs_age)
+            if now_date - db_date > max_age_delta:
+                logger.info("[Logstore SQLite] Removing old archive: %s", filename)
+                os.remove(os.path.join(self.archive_path, filename))
 
     def log_db_historic_contents(self):
         """
@@ -486,7 +509,7 @@ class LiveStatusLogStoreSqlite(BaseModule):
         if re.match("^\[[0-9]*\] [A-Z][a-z]*.:", line):
             # Match log which NOT have to be stored
             # print "Unexpected in manage_log_brok", line
-            return 
+            return
         try:
             logline = Logline(line=line)
             values = logline.as_tuple()
